@@ -1,0 +1,30 @@
+email:
+  smtp_server: smtp.gmail.com
+  smtp_port: 587
+  sender_email: your_email@gmail.com
+  sender_password: your_app_password
+  recipient_email: recipient@example.com
+
+market:
+  symbol: ^BSESN  # SENSEX symbol on Yahoo Finance
+  data_fetch_days: 365  # Number of days of historical data to fetch
+  
+indicators:
+  sma:
+    short_period: 50
+    long_period: 200
+  rsi:
+    period: 14
+  macd:
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+  
+report:
+  output_format: html
+  report_directory: reports/daily_reports/{date}/{timestamp}
+  report_filename: daily_market_report.html
+  
+scheduling:
+  enabled: true
+  time: "18:00"  # Report generation time (HH:MM)
