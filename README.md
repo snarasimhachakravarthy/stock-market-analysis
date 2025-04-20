@@ -35,11 +35,20 @@ git clone https://github.com/snarasimhachakravarthy/stock-market-analysis.git
 cd stock-market-analysis
 ```
 
-2. Create and activate a virtual environment:
+2. Create and activate a virtual environment (or use the provided one):
 ```bash
+# If you want to create a new environment:
 python -m venv stock_market_env
 source stock_market_env/bin/activate  # On Windows: stock_market_env\Scripts\activate
 ```
+
+**To activate the project-specific virtual environment created with pyenv:**
+```bash
+source ~/.pyenv/versions/3.11.8/envs/stock_market_env/bin/activate
+```
+
+- Make sure to activate this environment before running any scripts or installing requirements.
+
 
 3. Install dependencies:
 ```bash
