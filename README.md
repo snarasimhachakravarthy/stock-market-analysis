@@ -54,17 +54,34 @@ This repository contains a Python script to generate a daily HTML report for Ind
     ```
     *Note for Windows users:* You might need to use a Git Bash terminal or WSL to run the `.sh` script, or manually create the virtual environment (`python -m venv .venv`) and activate it (`.venv\Scripts\activate`), then install dependencies (`pip install -r requirements.txt`).
 
-3.  **Customize Stock List (Optional):**
-    Edit the `stocks_list.csv` file to include the Indian stock tickers (e.g., `RELIANCE.NS`, `INFY.NS`) or index tickers (e.g., `^NSEI` for NIFTY 50, `^BSESN` for SENSEX) you want to analyze. Each ticker should be on a new line under the "Ticker" header.
+3.  **Running the Application (Local UI):**
+    Once the setup is complete and the virtual environment is activated, you can run the local Streamlit UI:
+    ```bash
+    streamlit run app.py
+    ```
+    This will typically open the application in your default web browser.
 
-4.  **Generate the Report:**
-    Ensure your virtual environment is activated. Then run the script:
+    **Using the Local UI:**
+    *   **Single Ticker Analysis:** Enter a stock ticker in the sidebar (e.g., `RELIANCE.NS` for an Indian stock, or `AAPL` for a US stock) and click "Analyze Ticker". The analysis for that ticker will appear in the main window.
+    *   **Full HTML Report Generation:** Click the "Generate Full Report" button in the sidebar. This will process all tickers listed in `stocks_list.csv` and create/update the `stock_report.html` file. A link to this file will appear in the sidebar.
+
+4.  **Customize Stock List for Full Report (Optional):**
+    Edit the `stocks_list.csv` file to include the stock tickers (e.g., `RELIANCE.NS`, `INFY.NS`, `AAPL`, `MSFT`) or index tickers (e.g., `^NSEI` for NIFTY 50, `^BSESN` for SENSEX) you want to include in the full HTML report. Each ticker should be on a new line under the "Ticker" header. The tool supports both Indian (e.g., `.NS`, `.BO` suffixes) and US (no suffix) stock tickers.
+
+5.  **Direct Full Report Generation (Alternative to UI):**
+    If you only want to generate the full HTML report without using the UI, ensure your virtual environment is activated, then run:
     ```bash
     python report_generator.py
     ```
 
-5.  **View the Report:**
+6.  **View the Full HTML Report:**
     Open the generated `stock_report.html` file in your web browser. Charts will be located in the `charts/` directory and are embedded in the HTML report.
+
+## Supported Markets
+
+*   **Indian Stocks:** Use standard Yahoo Finance tickers (e.g., `RELIANCE.NS`, `INFY.BO`).
+*   **US Stocks:** Use standard Yahoo Finance tickers (e.g., `AAPL`, `MSFT`).
+*   **Major Indices:** (e.g., `^NSEI`, `^BSESN`, `^GSPC`).
 
 ## Metrics Used
 

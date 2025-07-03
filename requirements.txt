@@ -2,3 +2,4 @@ yfinance
 pandas
 matplotlib
 seaborn
+streamlit
