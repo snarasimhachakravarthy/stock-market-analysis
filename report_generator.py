@@ -2,43 +2,168 @@ import yfinance as yf
 import pandas as pd
 import os
 import datetime
+import time
 import matplotlib.pyplot as plt
+from functools import lru_cache
+from datetime import datetime, timedelta
 from technical_indicators import calculate_sma, calculate_rsi, calculate_macd, calculate_bollinger_bands
+
+# Rate limiting
+import random
+RATE_LIMIT_DELAY = 3  # Increased base delay to 3 seconds
+last_api_call = 0
+
+def rate_limit():
+    global last_api_call
+    current_time = time.time()
+    time_since_last = current_time - last_api_call
+    
+    if time_since_last < RATE_LIMIT_DELAY:
+        # Add jitter to prevent synchronized requests
+        sleep_time = (RATE_LIMIT_DELAY - time_since_last) + random.uniform(0.5, 1.5)
+        print(f"Rate limiting: Waiting {sleep_time:.2f} seconds...")
+        time.sleep(sleep_time)
+    
+    last_api_call = time.time()
+    return
+
+# Cache TTL (1 hour)
+CACHE_TTL = 3600
+
+# In-memory cache for stock data
+stock_data_cache = {}
+
+def get_cached_data(ticker_symbol: str, period: str, interval: str = "1d"):
+    """Get data from cache or fetch if not available/expired"""
+    cache_key = f"{ticker_symbol}_{period}_{interval}"
+    now = time.time()
+    
+    if cache_key in stock_data_cache:
+        data, timestamp = stock_data_cache[cache_key]
+        if now - timestamp < CACHE_TTL:
+            return data
+    
+    # Not in cache or expired, fetch fresh data
+    rate_limit()
+    ticker = yf.Ticker(ticker_symbol)
+    data = ticker.history(period=period, interval=interval)
+    
+    if not data.empty:
+        stock_data_cache[cache_key] = (data, now)
+    
+    return data
 
 # Ensure charts directory exists
 CHARTS_DIR = "charts"
 os.makedirs(CHARTS_DIR, exist_ok=True)
 
-def get_stock_data(ticker_symbol: str, period: str = "1y", interval: str = "1d"):
+def get_stock_data(ticker_symbol: str, period: str = "1y", interval: str = "1d", start: str = None, end: str = None, max_retries: int = 3):
     """
-    Fetches historical market data for a given stock ticker.
+    Fetches historical market data for a given stock ticker with rate limiting, caching, and retry logic.
+    
+    Args:
+        ticker_symbol: Stock ticker symbol (e.g., 'AAPL')
+        period: Data period to download (e.g., '1y', '2y', '6mo')
+        interval: Data interval (e.g., '1d' for daily, '1wk' for weekly)
+        start: Start date in 'YYYY-MM-DD' format (alternative to period)
+        end: End date in 'YYYY-MM-DD' format (defaults to today)
+        max_retries: Maximum number of retry attempts on failure
     """
-    try:
-        ticker = yf.Ticker(ticker_symbol)
-        history = ticker.history(period=period, interval=interval)
-        if history.empty:
-            print(f"No historical data found for {ticker_symbol} for the period {period}.")
-            return None
-        return history
-    except Exception as e:
-        print(f"Error fetching historical data for {ticker_symbol}: {e}")
-        return None
+    print(f"\n=== Fetching data for {ticker_symbol} ===")
+    print(f"Period: {period}, Interval: {interval}")
+    if start and end:
+        print(f"Date range: {start} to {end}")
+    
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            # Try to get data from cache first if not using specific dates
+            cache_key = f"{ticker_symbol}_{period if not start else start}_{interval}"
+            if start is None and end is None:
+                data = get_cached_data(ticker_symbol, period, interval)
+                if data is not None and not data.empty:
+                    print(f"✅ Using cached data for {ticker_symbol} ({len(data)} data points)")
+                    return data
+            else:
+                data = None
+            
+            print(f"Attempt {attempt + 1} of {max_retries}...")
+            rate_limit()  # Rate limit before each API call
+            
+            ticker = yf.Ticker(ticker_symbol)
+            
+            # Add a small delay to prevent rapid API calls
+            time.sleep(1 + random.random())  # 1-2 second delay
+            
+            if start and end:
+                print(f"Fetching data from {start} to {end}")
+                data = ticker.history(start=start, end=end, interval=interval)
+                if not data.empty:
+                    print(f"✅ Successfully fetched {len(data)} data points for the specified date range")
+            else:
+                # Fall back to period-based fetching with retries
+                for p in [period, "2y", "1y", "6mo"]:
+                    print(f"Trying period: {p}")
+                    data = ticker.history(period=p, interval=interval)
+                    if not data.empty:
+                        print(f"✅ Successfully fetched {len(data)} data points for period {p}")
+                        break
+            
+            if data is not None and not data.empty:
+                # Validate the data before returning
+                required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                missing_columns = [col for col in required_columns if col not in data.columns]
+                
+                if missing_columns:
+                    print(f"❌ Missing required columns: {', '.join(missing_columns)}")
+                    print(f"Available columns: {', '.join(data.columns)}")
+                    raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
+                
+                # Cache the successful fetch if not using specific dates
+                if start is None and end is None:
+                    stock_data_cache[cache_key] = (data, time.time())
+                return data
+                
+        except Exception as fetch_error:
+            wait_time = (2 ** attempt) + random.random()  # Exponential backoff with jitter
+            print(f"❌ Attempt {attempt + 1} failed: {str(fetch_error)}")
+            print(f"Retrying in {wait_time:.1f} seconds...")
+            time.sleep(wait_time)
+        
+        attempt += 1
+    
+    print(f"❌ All {max_retries} attempts failed for {ticker_symbol}")
+    return None
 
 def get_stock_info(ticker_symbol: str):
     """
-    Fetches company information for a given stock ticker.
+    Fetches company information for a given stock ticker with rate limiting.
     Returns an empty dict if info is incomplete or error occurs.
     """
+    cache_key = f"info_{ticker_symbol}"
+    now = time.time()
+    
+    # Check cache first
+    if cache_key in stock_data_cache and (now - stock_data_cache[cache_key][1] < CACHE_TTL):
+        return stock_data_cache[cache_key][0]
+    
     try:
+        rate_limit()
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.info
+        
         # Check for a few key fields to ensure info is somewhat populated
-        if not info or not any(key in info for key in ['regularMarketPrice', 'currentPrice', 'longName', 'symbol']):
+        required_fields = ['regularMarketPrice', 'currentPrice', 'longName', 'symbol', 'sector']
+        if not info or not any(key in info for key in required_fields):
             print(f"Incomplete or invalid info for {ticker_symbol}.")
             return {}
+            
+        # Cache the result
+        stock_data_cache[cache_key] = (info, now)
         return info
+        
     except Exception as e:
-        print(f"Error fetching company info for {ticker_symbol}: {e}")
+        print(f"Error in get_stock_info for {ticker_symbol}: {str(e)}")
         return {}
 
 

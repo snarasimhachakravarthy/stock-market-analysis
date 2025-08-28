@@ -1,9 +1,43 @@
 import streamlit as st
 import pandas as pd
-import report_generator # Assuming report_generator.py is in the same directory
-import technical_indicators # Assuming technical_indicators.py is in the same directory
+import report_generator
+import technical_indicators
 import os
-import subprocess
+import time
+from datetime import datetime, timedelta
+
+# Configure the page
+st.set_page_config(
+    page_title="Stock Analysis Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Add custom CSS for better UI
+st.markdown("""
+    <style>
+    .main {
+        padding: 2rem;
+    }
+    .stButton>button {
+        background-color: #4CAF50;
+        color: white;
+        border-radius: 5px;
+        padding: 0.5rem 1rem;
+    }
+    .error {
+        color: #ff4b4b;
+    }
+    .success {
+        color: #4CAF50;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+def show_loading_spinner():
+    """Display a loading spinner"""
+    return st.spinner("Processing your request...")
 
 # Ensure charts directory exists (Streamlit might run from a different context)
 CHARTS_DIR = "charts"
@@ -13,19 +47,36 @@ def display_stock_analysis(ticker_symbol):
     """
     Fetches, analyzes, and displays data for a single stock ticker.
     """
-    st.subheader(f"Analysis for: {ticker_symbol}")
+    with st.spinner(f"Fetching data for {ticker_symbol}..."):
+        st.subheader(f"Analysis for: {ticker_symbol}")
 
-    # 1. Fetch Data
-    stock_info = report_generator.get_stock_info(ticker_symbol)
-    historical_data_full = report_generator.get_stock_data(ticker_symbol, period="1y") # For indicators
-
-    if stock_info is None:
-        st.error(f"Could not retrieve information for {ticker_symbol}. Please check the ticker symbol.")
-        return
-
-    if historical_data_full is None:
-        st.error(f"Could not retrieve historical data for {ticker_symbol}.")
-        return
+        # 1. Fetch Data with retry logic
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                stock_info = report_generator.get_stock_info(ticker_symbol)
+                if not stock_info:
+                    raise ValueError("No stock info returned")
+                    
+                historical_data_full = report_generator.get_stock_data(ticker_symbol, period="1y")
+                if historical_data_full is None or historical_data_full.empty:
+                    raise ValueError("No historical data returned")
+                
+                # If we get here, data is good
+                break
+                
+            except Exception as e:
+                if attempt == max_retries - 1:  # Last attempt
+                    st.error(f"❌ Failed to fetch data for {ticker_symbol} after {max_retries} attempts.")
+                    st.error(f"Error: {str(e)}")
+                    st.info("Please try again in a few minutes or check if the ticker symbol is correct.")
+                    return
+                
+                # Wait before retrying
+                time.sleep(retry_delay * (attempt + 1))
+                continue
 
     # Make a copy for display purposes if we only want to show a shorter period for the main price chart
     historical_data_display = report_generator.get_stock_data(ticker_symbol, period="6mo") # For display
@@ -139,46 +190,106 @@ def display_historical_stock_analysis(ticker_symbol, analysis_date):
     st.subheader(f"Historical Analysis for: {ticker_symbol} as of {analysis_date.strftime('%Y-%m-%d')}")
 
     # 1. Fetch historical data up to the analysis_date
-    # yfinance period parameter might need adjustment if '1y' is too short for older dates.
-    # For simplicity, we fetch a fixed longer period and then slice.
-    # Add one day to analysis_date for yfinance end date to include the analysis_date itself.
-    end_date_for_fetch = analysis_date + pd.Timedelta(days=1)
-    historical_data_all = report_generator.get_stock_data(ticker_symbol, period="5y", interval="1d") # Fetch up to 5 years
-
+    print(f"\n=== Starting Historical Analysis for {ticker_symbol} as of {analysis_date.strftime('%Y-%m-%d')} ===")
+    
+    # Convert analysis_date to pandas Timestamp if it's not already
+    if not isinstance(analysis_date, pd.Timestamp):
+        analysis_date = pd.to_datetime(analysis_date)
+    
+    # Calculate the start date (2 years before analysis date)
+    start_date = (analysis_date - pd.DateOffset(years=2)).strftime('%Y-%m-%d')
+    end_date = (analysis_date + pd.Timedelta(days=1)).strftime('%Y-%m-%d')  # Include analysis date
+    
+    print(f"Fetching data from {start_date} to {end_date}")
+    
+    # Fetch data with the calculated date range
+    historical_data_all = report_generator.get_stock_data(
+        ticker_symbol, 
+        start=start_date,
+        end=end_date,
+        interval="1d"
+    )
+    
     if historical_data_all is None or historical_data_all.empty:
-        st.error(f"Could not retrieve sufficient historical data for {ticker_symbol} to analyze as of {analysis_date.strftime('%Y-%m-%d')}.")
+        error_msg = f"❌ Could not retrieve any historical data for {ticker_symbol}."
+        print(error_msg)
+        st.error(error_msg)
         return
-
+        
+    print(f"Retrieved {len(historical_data_all)} data points from {historical_data_all.index[0].date()} to {historical_data_all.index[-1].date()}")
+    
+    # Ensure we have a valid datetime index and handle timezones
+    historical_data_all.index = pd.to_datetime(historical_data_all.index).tz_localize(None)
+    
     # Filter data up to the selected analysis_date
-    historical_data_截至日 = historical_data_all[historical_data_all.index <= pd.to_datetime(end_date_for_fetch)]
-
-    if historical_data_截至日.empty:
-        st.error(f"No historical data available for {ticker_symbol} on or before {analysis_date.strftime('%Y-%m-%d')}.")
+    analysis_date_naive = pd.Timestamp(analysis_date).tz_localize(None)
+    historical_data_filtered = historical_data_all[historical_data_all.index <= analysis_date_naive]
+    
+    if historical_data_filtered.empty:
+        error_msg = f"❌ No data available for {ticker_symbol} on or before {analysis_date.strftime('%Y-%m-%d')}."
+        print(error_msg)
+        st.error(error_msg)
         return
-
+        
     # Get the actual latest available date from the filtered data (could be before analysis_date if market was closed)
-    actual_analysis_date = historical_data_截至日.index.max()
+    actual_analysis_date = historical_data_filtered.index.max()
+    print(f"Using closest market date: {actual_analysis_date.strftime('%Y-%m-%d')}")
     st.info(f"Displaying data as of the closest available market day: {actual_analysis_date.strftime('%Y-%m-%d')}")
+    
+    # Ensure we have enough data for calculations (at least 200 days for SMA200)
+    if len(historical_data_filtered) < 200:
+        st.warning(f"Limited historical data available ({len(historical_data_filtered)} days). Some indicators may be less reliable.")
+        
+    # Use the filtered data for analysis
+    analysis_data = historical_data_filtered.copy()
 
     # 2. Calculate Technical Indicators based on data up to actual_analysis_date
-    historical_data_截至日['SMA_50'] = technical_indicators.calculate_sma(historical_data_截至日, window=50)
-    historical_data_截至日['SMA_200'] = technical_indicators.calculate_sma(historical_data_截至日, window=200)
-    historical_data_截至日['RSI_14'] = technical_indicators.calculate_rsi(historical_data_截至日, window=14)
-    macd_line, signal_line, hist = technical_indicators.calculate_macd(historical_data_截至日)
-    historical_data_截至日['MACD'] = macd_line
-    historical_data_截至日['Signal'] = signal_line
-    historical_data_截至日['MACD_Hist'] = hist
-    # Note: Bollinger Bands might not be as relevant for a single historical point without chart context.
+    print("Calculating technical indicators...")
+    
+    # Make a copy to avoid SettingWithCopyWarning
+    analysis_data = historical_data_filtered.copy()
+    
+    # Calculate indicators with error handling
+    try:
+        analysis_data['SMA_50'] = technical_indicators.calculate_sma(analysis_data, window=50)
+        analysis_data['SMA_200'] = technical_indicators.calculate_sma(analysis_data, window=200)
+        analysis_data['RSI_14'] = technical_indicators.calculate_rsi(analysis_data, window=14)
+        
+        macd_line, signal_line, hist = technical_indicators.calculate_macd(analysis_data)
+        if macd_line is not None and signal_line is not None and hist is not None:
+            analysis_data['MACD'] = macd_line
+            analysis_data['Signal'] = signal_line
+            analysis_data['MACD_Hist'] = hist
+        else:
+            print("Warning: MACD calculation returned None values")
+            
+    except Exception as e:
+        print(f"Error calculating indicators: {str(e)}")
+        st.error(f"Error calculating technical indicators: {str(e)}")
+        return
 
+    # Get the latest available values
+    latest_data = analysis_data.iloc[-1] if not analysis_data.empty else None
+    
+    if latest_data is None:
+        st.error("No data available for the selected date range.")
+        return
+        
     # 3. Display Metrics as of actual_analysis_date
     st.markdown(f"#### Metrics as of {actual_analysis_date.strftime('%Y-%m-%d')}")
-
-    latest_close = historical_data_截至日['Close'].iloc[-1] if not historical_data_截至日.empty else 'N/A'
-    sma50_val = historical_data_截至日['SMA_50'].iloc[-1] if 'SMA_50' in historical_data_截至日.columns and not historical_data_截至日['SMA_50'].empty and not pd.isna(historical_data_截至日['SMA_50'].iloc[-1]) else 'N/A'
-    sma200_val = historical_data_截至日['SMA_200'].iloc[-1] if 'SMA_200' in historical_data_截至日.columns and not historical_data_截至日['SMA_200'].empty and not pd.isna(historical_data_截至日['SMA_200'].iloc[-1]) else 'N/A'
-    rsi14_val = historical_data_截至日['RSI_14'].iloc[-1] if 'RSI_14' in historical_data_截至日.columns and not historical_data_截至日['RSI_14'].empty and not pd.isna(historical_data_截至日['RSI_14'].iloc[-1]) else 'N/A'
-    macd_val = historical_data_截至日['MACD'].iloc[-1] if 'MACD' in historical_data_截至日.columns and not historical_data_截至日['MACD'].empty and not pd.isna(historical_data_截至日['MACD'].iloc[-1]) else 'N/A'
-    signal_val = historical_data_截至日['Signal'].iloc[-1] if 'Signal' in historical_data_截至日.columns and not historical_data_截至日['Signal'].empty and not pd.isna(historical_data_截至日['Signal'].iloc[-1]) else 'N/A'
+    
+    # Helper function to safely get values
+    def get_indicator_value(col_name):
+        if col_name not in analysis_data.columns or analysis_data[col_name].isna().all():
+            return 'N/A'
+        return analysis_data[col_name].iloc[-1] if not pd.isna(analysis_data[col_name].iloc[-1]) else 'N/A'
+    
+    latest_close = get_indicator_value('Close')
+    sma50_val = get_indicator_value('SMA_50')
+    sma200_val = get_indicator_value('SMA_200')
+    rsi14_val = get_indicator_value('RSI_14')
+    macd_val = get_indicator_value('MACD')
+    signal_val = get_indicator_value('Signal')
 
     metrics_data = {
         "Closing Price": report_generator.format_value(latest_close),
