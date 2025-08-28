@@ -4,7 +4,16 @@ import report_generator
 import technical_indicators
 import os
 import time
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import plotly.express as px
+from plotly.subplots import make_subplots
+
+# Initialize session state
+if 'generate_full_report' not in st.session_state:
+    st.session_state.generate_full_report = False
+if 'analysis_done' not in st.session_state:
+    st.session_state.analysis_done = False
 
 # Configure the page
 st.set_page_config(
@@ -35,6 +44,151 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def create_interactive_stock_chart(data, ticker_symbol):
+    """Create an interactive stock chart with price, volume, and indicators"""
+    # Create figure with secondary y-axis for volume
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.5, 0.25, 0.25],
+        subplot_titles=(
+            f'{ticker_symbol} Price and Moving Averages',
+            'Volume',
+            'Technical Indicators'
+        )
+    )
+
+    # Price and Moving Averages
+    fig.add_trace(
+        go.Candlestick(
+            x=data.index,
+            open=data['Open'],
+            high=data['High'],
+            low=data['Low'],
+            close=data['Close'],
+            name='OHLC'
+        ),
+        row=1, col=1
+    )
+    
+    # Add moving averages if they exist
+    if 'SMA_50' in data.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data['SMA_50'],
+                name='SMA 50',
+                line=dict(color='blue', width=1.5)
+            ),
+            row=1, col=1
+        )
+    
+    if 'SMA_200' in data.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data['SMA_200'],
+                name='SMA 200',
+                line=dict(color='orange', width=1.5)
+            ),
+            row=1, col=1
+        )
+    
+    # Volume
+    colors = ['green' if row['Close'] >= row['Open'] else 'red' 
+              for _, row in data.iterrows()]
+    
+    fig.add_trace(
+        go.Bar(
+            x=data.index,
+            y=data['Volume'],
+            name='Volume',
+            marker_color=colors,
+            opacity=0.5
+        ),
+        row=2, col=1
+    )
+    
+    # RSI
+    if 'RSI_14' in data.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data['RSI_14'],
+                name='RSI 14',
+                line=dict(color='purple', width=1.5)
+            ),
+            row=3, col=1
+        )
+        
+        # Add RSI reference lines
+        fig.add_hline(y=70, line_dash='dash', line_color='red', row=3, col=1)
+        fig.add_hline(y=30, line_dash='dash', line_color='green', row=3, col=1)
+    
+    # MACD if available
+    if all(col in data.columns for col in ['MACD', 'Signal']):
+        fig.add_trace(
+            go.Bar(
+                x=data.index,
+                y=data['MACD_Hist'],
+                name='MACD Histogram',
+                marker_color=['green' if val > 0 else 'red' for val in data['MACD_Hist']]
+            ),
+            row=3, col=1
+        )
+        
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data['MACD'],
+                name='MACD',
+                line=dict(color='blue', width=1.5)
+            ),
+            row=3, col=1
+        )
+        
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data['Signal'],
+                name='Signal',
+                line=dict(color='orange', width=1.5)
+            ),
+            row=3, col=1
+        )
+    
+    # Update layout
+    fig.update_layout(
+        height=1000,
+        showlegend=True,
+        hovermode='x unified',
+        xaxis_rangeslider_visible=False,
+        template='plotly_white',
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    
+    # Update y-axes titles
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1)
+    fig.update_yaxes(title_text="Indicator", row=3, col=1)
+    
+    # Add range slider
+    fig.update_xaxes(
+        rangeslider_visible=False,
+        rangeselector=dict(
+            buttons=list([
+                dict(count=1, label="1m", step="month", stepmode="backward"),
+                dict(count=6, label="6m", step="month", stepmode="backward"),
+                dict(count=1, label="YTD", step="year", stepmode="todate"),
+                dict(count=1, label="1y", step="year", stepmode="backward"),
+                dict(step="all")
+            ])
+        )
+    )
+    
+    return fig
+
 def show_loading_spinner():
     """Display a loading spinner"""
     return st.spinner("Processing your request...")
@@ -45,10 +199,14 @@ os.makedirs(CHARTS_DIR, exist_ok=True)
 
 def display_stock_analysis(ticker_symbol):
     """
-    Fetches, analyzes, and displays data for a single stock ticker.
+    Fetches, analyzes, and displays data for a single stock ticker with interactive charts.
     """
     with st.spinner(f"Fetching data for {ticker_symbol}..."):
-        st.subheader(f"Analysis for: {ticker_symbol}")
+        st.subheader(f"📊 Analysis for: {ticker_symbol}")
+        
+        # Add a refresh button
+        if st.sidebar.button("🔄 Refresh Data"):
+            st.experimental_rerun()
 
         # 1. Fetch Data with retry logic
         max_retries = 3
@@ -60,7 +218,8 @@ def display_stock_analysis(ticker_symbol):
                 if not stock_info:
                     raise ValueError("No stock info returned")
                     
-                historical_data_full = report_generator.get_stock_data(ticker_symbol, period="1y")
+                # Get 2 years of data for better technical analysis
+                historical_data_full = report_generator.get_stock_data(ticker_symbol, period="2y")
                 if historical_data_full is None or historical_data_full.empty:
                     raise ValueError("No historical data returned")
                 
@@ -78,46 +237,135 @@ def display_stock_analysis(ticker_symbol):
                 time.sleep(retry_delay * (attempt + 1))
                 continue
 
-    # Make a copy for display purposes if we only want to show a shorter period for the main price chart
-    historical_data_display = report_generator.get_stock_data(ticker_symbol, period="6mo") # For display
-
     # 2. Calculate Technical Indicators (on full data)
-    historical_data_full['SMA_50'] = technical_indicators.calculate_sma(historical_data_full, window=50)
-    historical_data_full['SMA_200'] = technical_indicators.calculate_sma(historical_data_full, window=200)
-    historical_data_full['RSI_14'] = technical_indicators.calculate_rsi(historical_data_full, window=14)
-    macd_line, signal_line, hist = technical_indicators.calculate_macd(historical_data_full)
-    historical_data_full['MACD'] = macd_line
-    historical_data_full['Signal'] = signal_line
-    historical_data_full['MACD_Hist'] = hist
-    bb_middle, bb_upper, bb_lower = technical_indicators.calculate_bollinger_bands(historical_data_full)
-    historical_data_full['BB_Middle'] = bb_middle
-    historical_data_full['BB_Upper'] = bb_upper
-    historical_data_full['BB_Lower'] = bb_lower
+    with st.spinner("Calculating technical indicators..."):
+        # Calculate indicators
+        historical_data_full['SMA_50'] = technical_indicators.calculate_sma(historical_data_full, window=50)
+        historical_data_full['SMA_200'] = technical_indicators.calculate_sma(historical_data_full, window=200)
+        historical_data_full['RSI_14'] = technical_indicators.calculate_rsi(historical_data_full, window=14)
+        macd_line, signal_line, hist = technical_indicators.calculate_macd(historical_data_full)
+        historical_data_full['MACD'] = macd_line
+        historical_data_full['Signal'] = signal_line
+        historical_data_full['MACD_Hist'] = hist
+        bb_middle, bb_upper, bb_lower = technical_indicators.calculate_bollinger_bands(historical_data_full)
+        historical_data_full['BB_Middle'] = bb_middle
+        historical_data_full['BB_Upper'] = bb_upper
+        historical_data_full['BB_Lower'] = bb_lower
 
-    # Sync relevant calculated indicators to the display dataframe (match indices)
-    if historical_data_display is not None:
-        for col in ['SMA_50', 'SMA_200', 'RSI_14', 'MACD', 'Signal', 'MACD_Hist', 'BB_Middle', 'BB_Upper', 'BB_Lower']:
-            if col in historical_data_full.columns:
-                 historical_data_display[col] = historical_data_full[col].reindex(historical_data_display.index)
-
-
-    # 3. Display Key Metrics
-    st.markdown("#### Key Metrics")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(label="Current Price", value=report_generator.format_value(stock_info.get('regularMarketPrice')))
-        st.metric(label="Market Cap", value=report_generator.format_value(stock_info.get('marketCap'), 'integer'))
-        st.metric(label="P/E Ratio (TTM)", value=report_generator.format_value(stock_info.get('trailingPE')))
-        st.metric(label="EPS (TTM)", value=report_generator.format_value(stock_info.get('trailingEps')))
-    with col2:
-        st.metric(label="Day's Change", value=f"{report_generator.format_value(stock_info.get('regularMarketChange'))} ({report_generator.format_value(stock_info.get('regularMarketChangePercent'), 'percentage')})")
-        st.metric(label="52-Week High", value=report_generator.format_value(stock_info.get('fiftyTwoWeekHigh')))
-        st.metric(label="52-Week Low", value=report_generator.format_value(stock_info.get('fiftyTwoWeekLow')))
-        st.metric(label="Dividend Yield", value=report_generator.format_value(stock_info.get('dividendYield'), 'percentage'))
-
-    st.text(f"Sector: {stock_info.get('sector', 'N/A')}, Industry: {stock_info.get('industry', 'N/A')}")
-
-    # 4. Display Quick Inferences
+    # 3. Display the interactive chart
+    st.markdown("### 📈 Interactive Chart")
+    st.markdown("""
+        <div style="font-size: 0.9em; color: #666; margin-bottom: 1em;">
+        <b>Tip:</b> Use the range selector below to zoom in/out, or hover over the chart for detailed information.
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Create and display the interactive chart
+    fig = create_interactive_stock_chart(historical_data_full, ticker_symbol)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Display key metrics in a clean layout
+    st.markdown("### 📊 Key Metrics")
+    
+    if stock_info:
+        # Create columns for metrics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Current Price", 
+                     f"${stock_info.get('currentPrice', 'N/A'):.2f}",
+                     delta=f"{stock_info.get('dayChangePercent', 0):.2f}%")
+            st.metric("Market Cap", 
+                     f"${stock_info.get('marketCap', 0)/1e9:.2f}B" if stock_info.get('marketCap') else 'N/A')
+            
+        with col2:
+            st.metric("P/E Ratio", 
+                     f"{stock_info.get('trailingPE', 'N/A')}")
+            st.metric("52-Week Range", 
+                     f"${stock_info.get('fiftyTwoWeekLow', 'N/A'):.2f} - ${stock_info.get('fiftyTwoWeekHigh', 'N/A'):.2f}")
+            
+        with col3:
+            st.metric("Volume", 
+                     f"{stock_info.get('volume', 0)/1e6:.2f}M" if stock_info.get('volume') else 'N/A')
+            st.metric("Avg. Volume", 
+                     f"{stock_info.get('averageVolume', 0)/1e6:.2f}M" if stock_info.get('averageVolume') else 'N/A')
+    
+    # 4. Add technical analysis insights
+    st.markdown("### 🔍 Technical Analysis")
+    
+    # Create columns for technical analysis
+    tech_col1, tech_col2 = st.columns(2)
+    
+    with tech_col1:
+        st.markdown("#### 📊 Moving Averages")
+        if 'SMA_50' in historical_data_full.columns and 'SMA_200' in historical_data_full.columns:
+            latest_close = historical_data_full['Close'].iloc[-1]
+            sma50 = historical_data_full['SMA_50'].iloc[-1]
+            sma200 = historical_data_full['SMA_200'].iloc[-1]
+            
+            st.metric("50-Day SMA", f"${sma50:.2f}", 
+                     delta=f"{(sma50 - historical_data_full['SMA_50'].iloc[-2]):.2f}")
+            st.metric("200-Day SMA", f"${sma200:.2f}",
+                     delta=f"{(sma200 - historical_data_full['SMA_200'].iloc[-2]):.2f}")
+            
+            # Golden/Death Cross detection
+            if pd.notna(sma50) and pd.notna(sma200):
+                if sma50 > sma200 and historical_data_full['SMA_50'].iloc[-2] <= historical_data_full['SMA_200'].iloc[-2]:
+                    st.success("💰 Golden Cross Detected (50-day crossed above 200-day)")
+                elif sma50 < sma200 and historical_data_full['SMA_50'].iloc[-2] >= historical_data_full['SMA_200'].iloc[-2]:
+                    st.error("💀 Death Cross Detected (50-day crossed below 200-day)")
+    
+    with tech_col2:
+        st.markdown("#### 📈 Momentum Indicators")
+        if 'RSI_14' in historical_data_full.columns:
+            rsi = historical_data_full['RSI_14'].iloc[-1]
+            rsi_color = "red" if rsi > 70 else "green" if rsi < 30 else "orange"
+            st.markdown(f"**RSI (14):** <span style='color: {rsi_color}'>{rsi:.2f}</span>", 
+                       unsafe_allow_html=True)
+            
+            if rsi > 70:
+                st.warning("⚠️ Overbought: Consider taking profits or waiting for a pullback.")
+            elif rsi < 30:
+                st.info("ℹ️ Oversold: Potential buying opportunity, but confirm with other indicators.")
+        
+        if 'MACD' in historical_data_full.columns and 'Signal' in historical_data_full.columns:
+            macd = historical_data_full['MACD'].iloc[-1]
+            signal = historical_data_full['Signal'].iloc[-1]
+            macd_hist = historical_data_full['MACD_Hist'].iloc[-1]
+            
+            st.markdown(f"**MACD:** {macd:.2f}")
+            st.markdown(f"**Signal:** {signal:.2f}")
+            st.markdown(f"**Histogram:** {macd_hist:.2f}")
+            
+            if macd > signal and historical_data_full['MACD'].iloc[-2] <= historical_data_full['Signal'].iloc[-2]:
+                st.success("🟢 Bullish MACD Crossover")
+            elif macd < signal and historical_data_full['MACD'].iloc[-2] >= historical_data_full['Signal'].iloc[-2]:
+                st.error("🔴 Bearish MACD Crossover")
+    # 5. Add company information and additional details
+    if stock_info:
+        st.markdown("### ℹ️ Company Information")
+        info_col1, info_col2 = st.columns(2)
+        
+        with info_col1:
+            st.markdown(f"**Company:** {stock_info.get('longName', ticker_symbol)}")
+            st.markdown(f"**Sector:** {stock_info.get('sector', 'N/A')}")
+            st.markdown(f"**Industry:** {stock_info.get('industry', 'N/A')}")
+            
+        with info_col2:
+            st.markdown(f"**Exchange:** {stock_info.get('exchange', 'N/A')}")
+            st.markdown(f"**Currency:** {stock_info.get('currency', 'USD')}")
+            if 'website' in stock_info:
+                st.markdown(f"**Website:** [{stock_info['website']}]({stock_info['website']})")
+    
+    # 6. Add a link to more detailed analysis
+    st.markdown("---")
+    st.markdown("""
+    ### 📊 Want More Analysis?
+    - Generate a detailed PDF report using the sidebar
+    - Try different timeframes using the range selector on the chart
+    - Hover over data points for detailed information
+    - Use the toolbar in the top-right corner of the chart to zoom, pan, or download the chart
+    """)
     st.markdown("#### Quick Inferences")
     rsi_latest = historical_data_full['RSI_14'].iloc[-1] if 'RSI_14' in historical_data_full.columns and not historical_data_full['RSI_14'].empty and not pd.isna(historical_data_full['RSI_14'].iloc[-1]) else None
     rsi_inference = "N/A"
@@ -306,84 +554,212 @@ def display_historical_stock_analysis(ticker_symbol, analysis_date):
 
 
 # Main App UI
-st.set_page_config(layout="wide", page_title="Stock Analysis Tool")
-st.title("📈 Stock Analysis Tool")
+st.set_page_config(
+    layout="wide", 
+    page_title="Stock Analysis Tool",
+    page_icon="📈",
+    initial_sidebar_state="expanded"
+)
 
-st.sidebar.header("Single Ticker Analysis")
-ticker_input = st.sidebar.text_input("Enter Stock Ticker (e.g., RELIANCE.NS, AAPL)", "RELIANCE.NS")
+# Custom CSS for better UI
+st.markdown("""
+    <style>
+    .main {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    .stButton>button {
+        background-color: #4CAF50;
+        color: white;
+        border-radius: 5px;
+        padding: 0.5rem 1rem;
+        width: 100%;
+    }
+    .stTextInput>div>div>input {
+        border-radius: 5px;
+        padding: 0.5rem;
+    }
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: #2c3e50;
+    }
+    .stMarkdown {
+        color: #34495e;
+    }
+    .stAlert {
+        border-radius: 5px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# Date input for historical analysis
-st.sidebar.subheader("Historical View")
-# Max date is yesterday to ensure data is typically available. Min date can be set further back.
-yesterday = pd.Timestamp('today').normalize() - pd.Timedelta(days=1)
-historical_date_input = st.sidebar.date_input("Select Historical Date", value=yesterday, max_value=yesterday, help="View indicators as of this date.")
+# Main title with description
+st.title("📈 Stock Analysis Dashboard")
+st.markdown("""
+    <div style='margin-bottom: 2rem; color: #7f8c8d;'>
+        Analyze stocks with interactive charts, technical indicators, and fundamental metrics.
+        Get insights to make informed investment decisions.
+    </div>
+""", unsafe_allow_html=True)
 
-analyze_button = st.sidebar.button("Analyze Ticker (Current & Historical)")
+# Sidebar
+with st.sidebar:
+    st.markdown("## 🔍 Stock Analysis")
+    
+    # Ticker input with example
+    ticker_input = st.text_input(
+        "Enter Stock Ticker",
+        value="RELIANCE.NS",
+        help="E.g., RELIANCE.NS, TATAMOTORS.NS, AAPL, MSFT"
+    )
+    
+    # Add a sample tickers section
+    st.markdown("### 📋 Sample Tickers")
+    sample_col1, sample_col2 = st.columns(2)
+    
+    with sample_col1:
+        if st.button("NIFTY 50"):
+            ticker_input = "^NSEI"
+        if st.button("RELIANCE"):
+            ticker_input = "RELIANCE.NS"
+        if st.button("TATA MOTORS"):
+            ticker_input = "TATAMOTORS.NS"
+            
+    with sample_col2:
+        if st.button("AAPL"):
+            ticker_input = "AAPL"
+        if st.button("MSFT"):
+            ticker_input = "MSFT"
+        if st.button("GOOGL"):
+            ticker_input = "GOOGL"
+    
+    # Date input for historical analysis
+    st.markdown("### ⏳ Historical View")
+    yesterday = pd.Timestamp('today').normalize() - pd.Timedelta(days=1)
+    historical_date_input = st.date_input(
+        "Select Historical Date", 
+        value=yesterday, 
+        max_value=yesterday, 
+        help="View indicators as of this date"
+    )
+    
+    # Add some space
+    st.markdown("---")
+    
+    # Add a section for report generation
+    st.markdown("### 📄 Generate Report")
+    if st.button("📊 Generate PDF Report"):
+        with st.spinner("Generating report..."):
+            try:
+                report_path = report_generator.generate_report([ticker_input], "stock_report.pdf")
+                with open(report_path, "rb") as f:
+                    st.download_button(
+                        label="📥 Download PDF Report",
+                        data=f,
+                        file_name=f"{ticker_input}_report.pdf",
+                        mime="application/pdf"
+                    )
+                st.success("Report generated successfully!")
+            except Exception as e:
+                st.error(f"Error generating report: {str(e)}")
+    
+    # Add a link to the GitHub repo
+    st.markdown("---")
+    st.markdown("""
+    ### 📚 Resources
+    - [Documentation](#)
+    - [GitHub Repository](#)
+    - [Report an Issue](#)
+    
+    Made with ❤️ using [Streamlit](https://streamlit.io/)
+    """)
 
+# Initialize session state for tracking analysis
+if 'analysis_done' not in st.session_state:
+    st.session_state.analysis_done = False
 
-st.sidebar.header("Full Report Generation")
-report_button = st.sidebar.button("Generate Full Report (for stocks_list.csv)")
+# Main content area
+tab1, tab2 = st.tabs(["📊 Current Analysis", "📅 Historical View"])
 
-if analyze_button and ticker_input:
-    with st.spinner(f"Fetching and analyzing {ticker_input} for current data..."):
-        display_stock_analysis(ticker_input)
+with tab1:
+    if ticker_input:
+        with st.spinner(f"Analyzing {ticker_input}..."):
+            try:
+                display_stock_analysis(ticker_input)
+                st.session_state.analysis_done = True
+            except Exception as e:
+                st.error(f"Error analyzing {ticker_input}: {str(e)}")
+                st.exception(e)  # Show full traceback for debugging
+    else:
+        st.info("👈 Enter a stock ticker in the sidebar to get started")
 
-    if historical_date_input:
-        with st.spinner(f"Fetching and analyzing {ticker_input} for historical date {historical_date_input.strftime('%Y-%m-%d')}..."):
-            display_historical_stock_analysis(ticker_input, historical_date_input)
-    st.session_state.analysis_done = True
+with tab2:
+    if ticker_input:
+        with st.spinner(f"Fetching historical data for {ticker_input} as of {historical_date_input}..."):
+            try:
+                display_historical_stock_analysis(ticker_input, historical_date_input)
+            except Exception as e:
+                st.error(f"Error fetching historical data: {str(e)}")
+    else:
+        st.info("👈 Enter a stock ticker and select a date to view historical analysis")
 
+# Add full report button in the sidebar
+with st.sidebar:
+    st.markdown("---")
+    if st.button("📄 Generate Full Report (stocks_list.csv)"):
+        st.session_state.generate_full_report = True
 
-if report_button:
-    st.sidebar.info("Generating full report... This may take a few moments.")
-    try:
-        # Using subprocess to call the report_generator.py script
-        # This ensures it runs in its own context and generates the PDF file as designed
-        process = subprocess.run(['python', 'report_generator.py'], capture_output=True, text=True, check=True)
-
-        pdf_file_path = "stock_report.pdf" # Expected output filename from report_generator.py
-        if os.path.exists(pdf_file_path):
-            st.sidebar.success(f"Full PDF report '{pdf_file_path}' generated successfully!")
-            with open(pdf_file_path, "rb") as pdf_file:
-                PDFbyte = pdf_file.read()
-            st.sidebar.download_button(label="Download PDF Report",
-                                data=PDFbyte,
-                                file_name="stock_analysis_report.pdf",
-                                mime='application/octet-stream')
+# Handle full report generation
+if st.session_state.get('generate_full_report', False):
+    with st.spinner("Generating full report..."):
+        if os.path.exists('stocks_list.csv'):
+            try:
+                df = pd.read_csv('stocks_list.csv')
+                tickers = df['Ticker'].dropna().tolist()
+                if tickers:
+                    report_path = report_generator.generate_report(tickers, 'stock_report.pdf')
+                    
+                    with open(report_path, "rb") as f:
+                        st.sidebar.download_button(
+                            label="📥 Download Full PDF Report",
+                            data=f,
+                            file_name="full_stock_report.pdf",
+                            mime="application/pdf"
+                        )
+                    st.sidebar.success("Full report generated successfully!")
+                else:
+                    st.sidebar.error("No valid tickers found in stocks_list.csv")
+            except Exception as e:
+                st.sidebar.error(f"Error generating full report: {str(e)}")
         else:
-            st.sidebar.error("PDF report file not found after generation.")
+            st.sidebar.error("stocks_list.csv not found. Please create this file with your list of tickers.")
+    st.session_state.generate_full_report = False
 
-        # Display script output if any
-        if process.stdout:
-             st.sidebar.text_area("Report Generation Log:", process.stdout, height=100)
-        if process.stderr:
-            st.sidebar.warning("Report generation script ran with some warnings/errors:")
-            st.sidebar.code(process.stderr)
-
-    except subprocess.CalledProcessError as e:
-        st.sidebar.error(f"Error generating full PDF report:")
-        st.sidebar.code(e.stdout)
-        st.sidebar.code(e.stderr)
-    except Exception as e:
-        st.sidebar.error(f"An unexpected error occurred during PDF report generation: {e}")
+    if historical_date_input and ticker_input:
+        with st.spinner(f"Fetching and analyzing {ticker_input} for historical date {historical_date_input.strftime('%Y-%m-%d')}..."):
+            try:
+                display_historical_stock_analysis(ticker_input, historical_date_input)
+                st.session_state.analysis_done = True
+            except Exception as e:
+                st.error(f"Error in historical analysis: {str(e)}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("Data sourced from Yahoo Finance. Not financial advice.")
 
 # Placeholder for main content area if no analysis is run yet or to show general info
-if not analyze_button and not report_button :
+if not st.session_state.get('analysis_done', False):
     st.markdown("""
-    Welcome to the Stock Analysis Tool!
-
+    # Welcome to the Stock Analysis Tool! 📈
+    
     **How to use:**
-    1.  **Single Ticker Analysis:** Enter a stock ticker in the sidebar (e.g., `INFY.NS` for Infosys India, `AAPL` for Apple Inc.) and click "Analyze Ticker".
-    2.  **Full Report:** Click "Generate Full Report" to create an HTML report for all tickers listed in `stocks_list.csv`.
-
-    The tool provides key metrics, technical indicators, basic inferences, and charts.
+    1. Enter a stock ticker in the sidebar (e.g., RELIANCE.NS, AAPL)
+    2. View interactive charts with technical indicators
+    3. Switch between current and historical views
+    4. Generate PDF reports from the sidebar
+    
+    ### Sample Tickers:
+    - Indian Stocks: RELIANCE.NS, TATAMOTORS.NS, INFY.NS
+    - US Stocks: AAPL, MSFT, GOOGL
+    - Indices: ^NSEI (Nifty 50), ^BSESN (Sensex), ^GSPC (S&P 500)
     """)
-    # Optionally, display a default analysis or a list of available tickers from csv
-    # default_tickers = report_generator.read_tickers_from_csv()
-    # if default_tickers:
     #     st.markdown("Tickers in `stocks_list.csv` for full report:")
     #     st.json(default_tickers)
 
