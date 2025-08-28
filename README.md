@@ -130,21 +130,15 @@ This repository contains a Python script to generate a daily HTML report for Ind
 
 ## Future Enhancements (Potential)
 
-*   **Interactive Charts:** Replacing current static charts in the UI with interactive ones (e.g., using Plotly).
+*   ~~**Interactive Charts:** Replacing current static charts in the UI with interactive ones (e.g., using Plotly).~~ ✅ **Completed**
 *   More sophisticated inference engine and signal generation logic.
-
-*   **Buy/Sell/Hold:** A signal is generated based on a combination of SMA positions, RSI levels, and MACD crossovers.
-*   **Reasoning:** Key technical observations that contributed to the signal are listed as bullet points. This is available in both the UI and the PDF report for individual stocks.
-
-## Future Enhancements (Potential)
-
-*   **Interactive Charts:** Replacing current static charts in the UI with interactive ones (e.g., using Plotly).
-*   More sophisticated inference engine and signal generation logic.
-*   Interactive charts (e.g., using Plotly or Bokeh).
 *   Allowing users to customize indicator parameters.
 *   Detailed industry/sector comparison for P/E ratios.
 *   Calculation of D/E ratio from balance sheet data.
 *   Portfolio analysis features.
+*   Dark/Light theme toggle.
+*   User preferences and watchlists.
+*   Mobile responsiveness improvements.
 
 ## Disclaimer
 
